@@ -4,6 +4,8 @@
 
 This module will teleport the player to the start of the dungeon on death.
 
+This is a fork of [AnchyDev/DungeonRespawn](https://github.com/AnchyDev/DungeonRespawn), which is archived. It uses the current AzerothCore PlayerScript hook names (`OnPlayerBeforeTeleport`, `OnPlayerMapChanged`, `OnPlayerLogin`, `OnPlayerLogout`) and locks its shared state, because player hooks run on several map update threads; everything else is the original module.
+
 ## Install
 
 Just clone the module into your modules directory for your server, re-run cmake and compile.
