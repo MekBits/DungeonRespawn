@@ -25,15 +25,16 @@ struct PlayerRespawnData
     bool inDungeon;
 };
 
-std::vector<PlayerRespawnData> respawnData;
-
-bool drEnabled;
-float respawnHpPct;
-
 class DSPlayerScript : public PlayerScript
 {
 public:
-    DSPlayerScript() : PlayerScript("DSPlayerScript") { }
+    DSPlayerScript() : PlayerScript("DSPlayerScript", {
+        PLAYERHOOK_ON_PLAYER_RELEASED_GHOST,
+        PLAYERHOOK_ON_BEFORE_TELEPORT,
+        PLAYERHOOK_ON_MAP_CHANGED,
+        PLAYERHOOK_ON_LOGIN,
+        PLAYERHOOK_ON_LOGOUT
+    }) { }
 
 private:
     std::vector<ObjectGuid> playersToTeleport;
@@ -42,16 +43,19 @@ private:
     PlayerRespawnData* GetOrCreateRespawnData(Player* /*player*/);
     void CreateRespawnData(Player* /*player*/);
     void OnPlayerReleasedGhost(Player* /*player*/) override;
-    bool OnBeforeTeleport(Player* /*player*/, uint32 /*mapid*/, float /*x*/, float /*y*/, float /*z*/, float /*orientation*/, uint32 /*options*/, Unit* /*target*/) override;
-    void OnMapChanged(Player* /*player*/) override;
-    void OnLogin(Player* /*player*/) override;
-    void OnLogout(Player* /*player*/) override;
+    bool OnPlayerBeforeTeleport(Player* /*player*/, uint32 /*mapid*/, float /*x*/, float /*y*/, float /*z*/, float /*orientation*/, uint32 /*options*/, Unit* /*target*/) override;
+    void OnPlayerMapChanged(Player* /*player*/) override;
+    void OnPlayerLogin(Player* /*player*/) override;
+    void OnPlayerLogout(Player* /*player*/) override;
 };
 
 class DSWorldScript : public WorldScript
 {
 public:
-    DSWorldScript() : WorldScript("DSWorldScript") { }
+    DSWorldScript() : WorldScript("DSWorldScript", {
+        WORLDHOOK_ON_AFTER_CONFIG_LOAD,
+        WORLDHOOK_ON_SHUTDOWN
+    }) { }
 
 private:
     void OnAfterConfigLoad(bool /*reload*/) override;

@@ -1,4 +1,15 @@
 #include "DungeonRespawn.h"
+#include <mutex>
+
+namespace
+{
+    std::vector<PlayerRespawnData> respawnData;
+    // Player hooks run on the map update threads, so respawnData and playersToTeleport are shared.
+    std::mutex respawnLock;
+
+    bool drEnabled;
+    float respawnHpPct;
+}
 
 bool DSPlayerScript::IsInsideDungeonRaid(Player* player)
 {
@@ -32,6 +43,7 @@ void DSPlayerScript::OnPlayerReleasedGhost(Player* player)
         return;
     }
 
+    std::lock_guard<std::mutex> guard(respawnLock);
     playersToTeleport.push_back(player->GetGUID());
 }
 
@@ -41,7 +53,7 @@ void DSPlayerScript::ResurrectPlayer(Player* player)
     player->SpawnCorpseBones();
 }
 
-bool DSPlayerScript::OnBeforeTeleport(Player* player, uint32 mapid, float /*x*/, float /*y*/, float /*z*/, float /*orientation*/, uint32 /*options*/, Unit* /*target*/)
+bool DSPlayerScript::OnPlayerBeforeTeleport(Player* player, uint32 mapid, float /*x*/, float /*y*/, float /*z*/, float /*orientation*/, uint32 /*options*/, Unit* /*target*/)
 {
     if (!drEnabled)
     {
@@ -52,6 +64,8 @@ bool DSPlayerScript::OnBeforeTeleport(Player* player, uint32 mapid, float /*x*/,
     {
         return true;
     }
+
+    std::unique_lock<std::mutex> guard(respawnLock);
 
     if (player->GetMapId() != mapid)
     {
@@ -103,7 +117,11 @@ bool DSPlayerScript::OnBeforeTeleport(Player* player, uint32 mapid, float /*x*/,
             return true;
         }
 
-        player->TeleportTo(prData->dungeon.map, prData->dungeon.x, prData->dungeon.y, prData->dungeon.z, prData->dungeon.o);
+        DungeonData dungeon = prData->dungeon;
+
+        // TeleportTo calls this hook again, so the lock must be released first.
+        guard.unlock();
+        player->TeleportTo(dungeon.map, dungeon.x, dungeon.y, dungeon.z, dungeon.o);
         ResurrectPlayer(player);
         return false;
     }
@@ -113,6 +131,8 @@ bool DSPlayerScript::OnBeforeTeleport(Player* player, uint32 mapid, float /*x*/,
 
 void DSWorldScript::OnAfterConfigLoad(bool reload)
 {
+    std::lock_guard<std::mutex> guard(respawnLock);
+
     if (reload)
     {
         SaveRespawnData();
@@ -160,6 +180,7 @@ void DSWorldScript::OnAfterConfigLoad(bool reload)
 
 void DSWorldScript::OnShutdown()
 {
+    std::lock_guard<std::mutex> guard(respawnLock);
     SaveRespawnData();
 }
 
@@ -207,13 +228,14 @@ PlayerRespawnData* DSPlayerScript::GetOrCreateRespawnData(Player* player)
     return GetOrCreateRespawnData(player);
 }
 
-void DSPlayerScript::OnMapChanged(Player* player)
+void DSPlayerScript::OnPlayerMapChanged(Player* player)
 {
     if (!player)
     {
         return;
     }
 
+    std::lock_guard<std::mutex> guard(respawnLock);
     auto prData = GetOrCreateRespawnData(player);
 
     if (!prData)
@@ -261,30 +283,26 @@ void DSPlayerScript::CreateRespawnData(Player* player)
     respawnData.push_back(newPrData);
 }
 
-void DSPlayerScript::OnLogin(Player* player)
+void DSPlayerScript::OnPlayerLogin(Player* player)
 {
     if (!player)
     {
         return;
     }
 
+    std::lock_guard<std::mutex> guard(respawnLock);
     GetOrCreateRespawnData(player);
 }
 
-void DSPlayerScript::OnLogout(Player* player)
+void DSPlayerScript::OnPlayerLogout(Player* player)
 {
     if (!player)
     {
         return;
     }
 
-    for (auto it = playersToTeleport.begin(); it < playersToTeleport.end(); ++it)
-    {
-        if (player->GetGUID() == (*it))
-        {
-            playersToTeleport.erase(it);
-        }
-    }
+    std::lock_guard<std::mutex> guard(respawnLock);
+    std::erase(playersToTeleport, player->GetGUID());
 }
 
 void SC_AddDungeonRespawnScripts()
