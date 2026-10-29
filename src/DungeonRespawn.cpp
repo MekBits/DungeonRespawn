@@ -1,290 +1,114 @@
 #include "DungeonRespawn.h"
+#include "AreaDefines.h"
+#include "InstanceScript.h"
+#include "ObjectMgr.h"
 
-bool DSPlayerScript::IsInsideDungeonRaid(Player* player)
+namespace
 {
-    if (!player)
+    bool drEnabled;
+    float respawnHpPct;
+
+    bool IsInsideDungeonRaid(Player* player)
     {
-        return false;
-    }
-
-    Map* map = player->GetMap();
-    if (!map)
-    {
-        return false;
-    }
-
-    if (!map->IsDungeon() && !map->IsRaid())
-    {
-        return false;
-    }
-
-    return true;
-}
-void DSPlayerScript::OnPlayerReleasedGhost(Player* player)
-{
-    if (!drEnabled)
-    {
-        return;
-    }
-
-    if (!IsInsideDungeonRaid(player))
-    {
-        return;
-    }
-
-    playersToTeleport.push_back(player->GetGUID());
-}
-
-void DSPlayerScript::ResurrectPlayer(Player* player)
-{
-    player->ResurrectPlayer(respawnHpPct / 100.0f, false);
-    player->SpawnCorpseBones();
-}
-
-bool DSPlayerScript::OnBeforeTeleport(Player* player, uint32 mapid, float /*x*/, float /*y*/, float /*z*/, float /*orientation*/, uint32 /*options*/, Unit* /*target*/)
-{
-    if (!drEnabled)
-    {
-        return true;
-    }
-
-    if (!player)
-    {
-        return true;
-    }
-
-    if (player->GetMapId() != mapid)
-    {
-        auto prData = GetOrCreateRespawnData(player);
-        prData->isTeleportingNewMap = true;
-    }
-
-    if (!IsInsideDungeonRaid(player))
-    {
-        return true;
-    }
-
-    if (!player->isDead())
-    {
-        return true;
-    }
-
-    GuidVector::iterator itToRemove;
-    bool canRestore = false;
-
-    for (auto it = playersToTeleport.begin(); it != playersToTeleport.end(); ++it)
-    {
-        if (*it == player->GetGUID())
+        Map* map = player->GetMap();
+        if (!map)
         {
-            itToRemove = it;
-            canRestore = true;
-            break;
-        }
-    }
-
-    if (!canRestore)
-    {
-        return true;
-    }
-
-    playersToTeleport.erase(itToRemove);
-
-    auto prData = GetOrCreateRespawnData(player);
-    if (prData)
-    {
-        //Invalid Player Restore data, use default behaviour.
-        if (prData->dungeon.map == -1)
-        {
-            return true;
+            return false;
         }
 
-        if (prData->dungeon.map != int32(player->GetMapId()))
+        return map->IsDungeon() || map->IsRaid();
+    }
+
+    // The Eye of Eternity's only entrance is on the platform Malygos destroys in phase 3, and drakes are only handed out once.
+    bool IsEntranceUnsafe(Player* player)
+    {
+        if (player->GetMapId() != MAP_THE_EYE_OF_ETERNITY)
         {
-            return true;
+            return false;
         }
 
-        player->TeleportTo(prData->dungeon.map, prData->dungeon.x, prData->dungeon.y, prData->dungeon.z, prData->dungeon.o);
-        ResurrectPlayer(player);
-        return false;
+        InstanceMap* instance = player->GetMap()->ToInstanceMap();
+        InstanceScript* script = instance ? instance->GetInstanceScript() : nullptr;
+        return script && script->IsEncounterInProgress();
     }
 
-    return true;
-}
-
-void DSWorldScript::OnAfterConfigLoad(bool reload)
-{
-    if (reload)
+    // Teleports that start inside the instance are skipped, so only entrances from outside count.
+    AreaTriggerTeleport const* GetNearestEntrance(Player* player)
     {
-        SaveRespawnData();
-        respawnData.clear();
-    }
+        AreaTriggerTeleport const* nearest = nullptr;
+        float nearestDistSq = 0.0f;
 
-    drEnabled = sConfigMgr->GetOption<bool>("DungeonRespawn.Enable", false);
-    respawnHpPct = sConfigMgr->GetOption<float>("DungeonRespawn.RespawnHealthPct", 50.0f);
-
-    QueryResult qResult = CharacterDatabase.Query("SELECT `guid`, `map`, `x`, `y`, `z`, `o` FROM `dungeonrespawn_playerinfo`");
-
-    if (qResult)
-    {
-        uint32 dataCount = 0;
-
-        do
+        for (auto const& [triggerId, teleport] : sObjectMgr->GetAllAreaTriggerTeleports())
         {
-            Field* fields = qResult->Fetch();
-
-            PlayerRespawnData prData;
-            DungeonData dData;
-            prData.guid = ObjectGuid(fields[0].Get<uint64>());
-            dData.map = fields[1].Get<int32>();
-            dData.x = fields[2].Get<float>();
-            dData.y = fields[3].Get<float>();
-            dData.z = fields[4].Get<float>();
-            dData.o = fields[5].Get<float>();
-            prData.dungeon = dData;
-            prData.isTeleportingNewMap = false;
-            prData.inDungeon = false;
-
-            respawnData.push_back(prData);
-
-            dataCount++;
-        } while (qResult->NextRow());
-
-        LOG_INFO("module", "Loaded '{}' rows from 'dungeonrespawn_playerinfo' table.", dataCount);
-    }
-    else
-    {
-        LOG_INFO("module", "Loaded '0' rows from 'dungeonrespawn_playerinfo' table.");
-        return;
-    }
-}
-
-void DSWorldScript::OnShutdown()
-{
-    SaveRespawnData();
-}
-
-void DSWorldScript::SaveRespawnData()
-{
-    for (const auto& prData : respawnData)
-    {
-        if (prData.inDungeon)
-        {
-            CharacterDatabase.Execute("INSERT INTO `dungeonrespawn_playerinfo` (guid, map, x, y, z, o) VALUES ({}, {}, {}, {}, {}, {}) ON DUPLICATE KEY UPDATE map={}, x={}, y={}, z={}, o={}",
-                prData.guid.GetRawValue(),
-                prData.dungeon.map,
-                prData.dungeon.x,
-                prData.dungeon.y,
-                prData.dungeon.z,
-                prData.dungeon.o,
-                prData.dungeon.map,
-                prData.dungeon.x,
-                prData.dungeon.y,
-                prData.dungeon.z,
-                prData.dungeon.o);
-        }
-        else
-        {
-            CharacterDatabase.Execute("DELETE FROM `dungeonrespawn_playerinfo` WHERE guid = {}", prData.guid.GetRawValue());
-        }
-    }
-}
-
-PlayerRespawnData* DSPlayerScript::GetOrCreateRespawnData(Player* player)
-{
-    for (auto it = respawnData.begin(); it != respawnData.end(); ++it)
-    {
-        if (it != respawnData.end())
-        {
-            if (player->GetGUID() == it->guid)
+            if (teleport.target_mapId != player->GetMapId())
             {
-                return &(*it);
+                continue;
+            }
+
+            AreaTrigger const* trigger = sObjectMgr->GetAreaTrigger(triggerId);
+            if (!trigger || trigger->map == teleport.target_mapId)
+            {
+                continue;
+            }
+
+            float distSq = player->GetExactDistSq(teleport.target_X, teleport.target_Y, teleport.target_Z);
+            if (!nearest || distSq < nearestDistSq)
+            {
+                nearest = &teleport;
+                nearestDistSq = distSq;
             }
         }
+
+        return nearest;
     }
-
-    CreateRespawnData(player);
-
-    return GetOrCreateRespawnData(player);
 }
 
-void DSPlayerScript::OnMapChanged(Player* player)
+bool DSPlayerScript::OnPlayerCanRepopAtGraveyard(Player* player)
 {
-    if (!player)
+    if (!drEnabled)
     {
-        return;
+        return true;
     }
 
-    auto prData = GetOrCreateRespawnData(player);
-
-    if (!prData)
+    // Only a released ghost: the core also calls RepopAtGraveyard to eject living or unreleased players from an instance.
+    if (!player || !player->HasPlayerFlag(PLAYER_FLAGS_GHOST))
     {
-        return;
+        return true;
     }
 
-    bool inDungeon = IsInsideDungeonRaid(player);
-    prData->inDungeon = inDungeon;
-
-    if (!inDungeon)
+    if (!IsInsideDungeonRaid(player) || IsEntranceUnsafe(player))
     {
-        return;
+        return true;
     }
 
-    if (!prData->isTeleportingNewMap)
+    // Without this check a vetoed resurrection would leave a ghost at the entrance with its corpse turned to bones.
+    if (!sScriptMgr->OnPlayerCanResurrect(player))
     {
-        return;
+        return true;
     }
 
-    prData->dungeon.map = player->GetMapId();
-    prData->dungeon.x = player->GetPositionX();
-    prData->dungeon.y = player->GetPositionY();
-    prData->dungeon.z = player->GetPositionZ();
-    prData->dungeon.o = player->GetOrientation();
+    AreaTriggerTeleport const* entrance = GetNearestEntrance(player);
+    if (!entrance)
+    {
+        return true;
+    }
 
-    prData->isTeleportingNewMap = false;
+    if (!player->TeleportTo(entrance->target_mapId, entrance->target_X, entrance->target_Y, entrance->target_Z, entrance->target_Orientation))
+    {
+        return true;
+    }
+
+    player->ResurrectPlayer(respawnHpPct / 100.0f, false);
+    player->SpawnCorpseBones();
+    // RepopAtGraveyard clears this after its own teleport, and returning false skips that.
+    player->RemovePlayerFlag(PLAYER_FLAGS_IS_OUT_OF_BOUNDS);
+    return false;
 }
 
-void DSPlayerScript::CreateRespawnData(Player* player)
+void DSWorldScript::OnAfterConfigLoad(bool /*reload*/)
 {
-    DungeonData newDData;
-    newDData.map = -1;
-    newDData.x = 0;
-    newDData.y = 0;
-    newDData.z = 0;
-    newDData.o = 0;
-
-    PlayerRespawnData newPrData;
-    newPrData.dungeon = newDData;
-    newPrData.guid = player->GetGUID();
-    newPrData.isTeleportingNewMap = false;
-    newPrData.inDungeon = false;
-    
-    respawnData.push_back(newPrData);
-}
-
-void DSPlayerScript::OnLogin(Player* player)
-{
-    if (!player)
-    {
-        return;
-    }
-
-    GetOrCreateRespawnData(player);
-}
-
-void DSPlayerScript::OnLogout(Player* player)
-{
-    if (!player)
-    {
-        return;
-    }
-
-    for (auto it = playersToTeleport.begin(); it < playersToTeleport.end(); ++it)
-    {
-        if (player->GetGUID() == (*it))
-        {
-            playersToTeleport.erase(it);
-        }
-    }
+    drEnabled = sConfigMgr->GetOption<bool>("DungeonRespawn.Enable", false);
+    respawnHpPct = sConfigMgr->GetOption<float>("DungeonRespawn.RespawnHealthPct", 50.0f);
 }
 
 void SC_AddDungeonRespawnScripts()
