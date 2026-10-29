@@ -18,8 +18,8 @@ DungeonRespawn.Enable = 0
 
 #
 #    DungeonRespawn.RespawnHealthPct
-#        Description: The amount of health in % to respawn with.
-#        Range:       0.0 - 100.0
+#        Description: The amount of health, mana and energy in % to respawn with. Rage starts at 0.
+#        Range:       0.0 - 100.0 (0.0 respawns with 1 health)
 #        Default:     50.0
 #
 

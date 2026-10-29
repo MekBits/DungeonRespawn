@@ -1,4 +1,6 @@
 #include "DungeonRespawn.h"
+#include "AreaDefines.h"
+#include "InstanceScript.h"
 #include "ObjectMgr.h"
 
 namespace
@@ -17,8 +19,20 @@ namespace
         return map->IsDungeon() || map->IsRaid();
     }
 
-    // The landing point of the instance portal nearest to the player. Teleports that start inside
-    // the instance itself are skipped, so only entrances from outside count.
+    // The Eye of Eternity's only entrance is on the platform Malygos destroys in phase 3, and drakes are only handed out once.
+    bool IsEntranceUnsafe(Player* player)
+    {
+        if (player->GetMapId() != MAP_THE_EYE_OF_ETERNITY)
+        {
+            return false;
+        }
+
+        InstanceMap* instance = player->GetMap()->ToInstanceMap();
+        InstanceScript* script = instance ? instance->GetInstanceScript() : nullptr;
+        return script && script->IsEncounterInProgress();
+    }
+
+    // Teleports that start inside the instance are skipped, so only entrances from outside count.
     AreaTriggerTeleport const* GetNearestEntrance(Player* player)
     {
         AreaTriggerTeleport const* nearest = nullptr;
@@ -56,13 +70,19 @@ bool DSPlayerScript::OnPlayerCanRepopAtGraveyard(Player* player)
         return true;
     }
 
-    // RepopAtGraveyard is also called for living players, e.g. when they fall below the map.
-    if (!player || !player->isDead())
+    // Only a released ghost: the core also calls RepopAtGraveyard to eject living or unreleased players from an instance.
+    if (!player || !player->HasPlayerFlag(PLAYER_FLAGS_GHOST))
     {
         return true;
     }
 
-    if (!IsInsideDungeonRaid(player))
+    if (!IsInsideDungeonRaid(player) || IsEntranceUnsafe(player))
+    {
+        return true;
+    }
+
+    // Without this check a vetoed resurrection would leave a ghost at the entrance with its corpse turned to bones.
+    if (!sScriptMgr->OnPlayerCanResurrect(player))
     {
         return true;
     }
